@@ -1,0 +1,107 @@
+name: Update Pi Version
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check for updates
+        id: check
+        run: |
+          set +e
+          ./scripts/update.sh --check
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "update_needed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 1 ]; then
+            current=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1)
+            latest=$(npm view @earendil-works/pi-coding-agent version)
+            echo "current=$current" >> "$GITHUB_OUTPUT"
+            echo "latest=$latest" >> "$GITHUB_OUTPUT"
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+
+      - name: Update version and hashes
+        if: steps.check.outputs.update_needed == 'true'
+        run: ./scripts/update.sh
+
+      - name: Create Pull Request
+        if: steps.check.outputs.update_needed == 'true'
+        id: create-pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update pi-coding-agent to ${{ steps.check.outputs.latest }}"
+          title: "chore: update pi-coding-agent to ${{ steps.check.outputs.latest }}"
+          body: |
+            ## Automated Pi update
+
+            Updates `@earendil-works/pi-coding-agent` from `${{ steps.check.outputs.current }}` to `${{ steps.check.outputs.latest }}`.
+
+            ### Changes
+            - Updated `version` in `package.nix`
+            - Updated upstream source hash
+            - Updated `npmDepsHash`
+            - Updated `flake.lock`
+
+            ### Verification
+            - `nix build .#pi-coding-agent`
+            - `./result/bin/pi --version`
+          branch: update-pi-${{ steps.check.outputs.latest }}
+          delete-branch: true
+          labels: |
+            dependencies
+            automated
+
+      - name: Enable auto-merge
+        if: steps.check.outputs.update_needed == 'true' && steps.create-pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge ${{ steps.create-pr.outputs.pull-request-number }} --auto --squash --delete-branch
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Update Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.check.outputs.update_needed }}" = "true" ]; then
+            echo "- **Current Version:** ${{ steps.check.outputs.current }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Latest Version:** ${{ steps.check.outputs.latest }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Pull request created." >> "$GITHUB_STEP_SUMMARY"
+          else
+            current=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1)
+            echo "- **Current Version:** $current" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ Already up to date." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,71 @@
+name: Create Version Tag
+
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from package.nix
+        id: version
+        run: |
+          version=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version tag exists
+        id: check-tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create immutable version tag
+        if: steps.check-tag.outputs.exists == 'false'
+        run: |
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Extract major version
+        id: major
+        run: |
+          major=$(echo "${{ steps.version.outputs.version }}" | cut -d. -f1)
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+
+      - name: Update moving tags
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          major="${{ steps.major.outputs.major }}"
+
+          git push origin :refs/tags/latest 2>/dev/null || true
+          git push origin :refs/tags/v$major 2>/dev/null || true
+
+          git tag -d latest 2>/dev/null || true
+          git tag -d v$major 2>/dev/null || true
+
+          git tag -a latest -m "Latest release: v$version"
+          git tag -a "v$major" -m "Latest v$major release: v$version"
+
+          git push origin latest
+          git push origin "v$major"
