@@ -8,6 +8,7 @@ readonly NC='\033[0m'
 
 readonly NPM_REGISTRY_URL="https://registry.npmjs.org"
 readonly NPM_PACKAGE_NAME="@earendil-works/pi-coding-agent"
+readonly NPM_PACKAGE_AI_NAME="@earendil-works/pi-ai"
 readonly FAKE_HASH="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -60,9 +61,33 @@ set_source_hash() {
 	mv "$temp_file" package.nix
 }
 
+
+
 set_npm_deps_hash() {
 	local hash="$1"
 	sed -i.bak -E "s|npmDepsHash = \"[^\"]+\"|npmDepsHash = \"$hash\"|" package.nix
+}
+
+set_model_data_hash() {
+	local hash="$1"
+	local temp_file
+	temp_file=$(mktemp)
+
+	awk -v hash="$hash" '
+    /modelData = fetchurl \{/ { in_md=1 }
+    in_md && /hash = / {
+      sub(/hash = "[^"]+"/, "hash = \"" hash "\"")
+      in_md=0
+    }
+    { print }
+  ' package.nix >"$temp_file"
+	mv "$temp_file" package.nix
+}
+
+prefetch_model_data_hash() {
+	local version="$1"
+	local url="$NPM_REGISTRY_URL/$NPM_PACKAGE_AI_NAME/-/pi-ai-$version.tgz"
+	nix store prefetch-file --json "$url" 2>/dev/null | sed -n 's/.*"hash":"\([^"]*\)".*/\1/p'
 }
 
 extract_got_hash() {
@@ -114,6 +139,16 @@ update_to_version() {
 	trap rollback_package ERR
 
 	set_version "$new_version"
+
+	log_info "Prefetching model data hash..."
+	local model_data_hash
+	model_data_hash=$(prefetch_model_data_hash "$new_version")
+	if [ -z "$model_data_hash" ]; then
+		log_error "Failed to prefetch model data hash for pi-ai $new_version"
+		return 1
+	fi
+	log_info "  modelData: $model_data_hash"
+	set_model_data_hash "$model_data_hash"
 
 	log_info "Prefetching source hash..."
 	set_source_hash "$FAKE_HASH"
