@@ -53,7 +53,7 @@ jobs:
 
       - name: Update version and hashes
         if: steps.check.outputs.update_needed == 'true'
-        run: ./scripts/update.sh
+        run: ./scripts/update.sh --version "${{ steps.check.outputs.latest }}"
 
       - name: Create Pull Request
         if: steps.check.outputs.update_needed == 'true'
@@ -70,9 +70,9 @@ jobs:
 
             ### Changes
             - Updated `version` in `package.nix`
-            - Updated upstream source hash
+            - Updated npm release tarball hash
+            - Hydrated `npm-shrinkwrap.json` integrity fields
             - Updated `npmDepsHash`
-            - Updated `flake.lock`
 
             ### Verification
             - `nix build .#pi-coding-agent`

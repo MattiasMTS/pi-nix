@@ -3,31 +3,22 @@ set -euo pipefail
 
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
 readonly NC='\033[0m'
 
 readonly NPM_REGISTRY_URL="https://registry.npmjs.org"
 readonly NPM_PACKAGE_NAME="@earendil-works/pi-coding-agent"
-readonly NPM_PACKAGE_AI_NAME="@earendil-works/pi-ai"
+readonly NPM_TARBALL_NAME="pi-coding-agent"
 readonly FAKE_HASH="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 get_current_version() {
-	sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1 || echo "unknown"
+	sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1
 }
 
 fetch_npm_version() {
-	if command -v npm >/dev/null 2>&1; then
-		npm view "$NPM_PACKAGE_NAME" version 2>/dev/null
-	elif command -v curl >/dev/null 2>&1; then
-		curl -sf --max-time 10 "$NPM_REGISTRY_URL/$NPM_PACKAGE_NAME/latest" |
-			sed -n 's/.*"version":"\([^"]*\)".*/\1/p'
-	else
-		return 1
-	fi
+	npm view "$NPM_PACKAGE_NAME" version 2>/dev/null
 }
 
 get_latest_version() {
@@ -37,12 +28,15 @@ get_latest_version() {
 		log_error "Failed to fetch latest version for $NPM_PACKAGE_NAME"
 		exit 2
 	fi
-	echo "$version"
+	printf '%s\n' "$version"
 }
 
 set_version() {
 	local version="$1"
-	sed -i.bak -E "s/version = \"[^\"]+\"/version = \"$version\"/" package.nix
+	local temp_file
+	temp_file=$(mktemp)
+	sed -E "s/version = \"[^\"]+\"/version = \"$version\"/" package.nix >"$temp_file"
+	mv "$temp_file" package.nix
 }
 
 set_source_hash() {
@@ -51,7 +45,7 @@ set_source_hash() {
 	temp_file=$(mktemp)
 
 	awk -v hash="$hash" '
-    /src = fetchFromGitHub \{/ { in_src=1 }
+    /src = fetchurl \{/ { in_src=1 }
     in_src && /hash = / {
       sub(/hash = "[^"]+"/, "hash = \"" hash "\"")
       in_src=0
@@ -61,41 +55,85 @@ set_source_hash() {
 	mv "$temp_file" package.nix
 }
 
-
-
 set_npm_deps_hash() {
-	local hash="$1"
-	sed -i.bak -E "s|npmDepsHash = \"[^\"]+\"|npmDepsHash = \"$hash\"|" package.nix
-}
-
-set_model_data_hash() {
 	local hash="$1"
 	local temp_file
 	temp_file=$(mktemp)
-
-	awk -v hash="$hash" '
-    /modelData = fetchurl \{/ { in_md=1 }
-    in_md && /hash = / {
-      sub(/hash = "[^"]+"/, "hash = \"" hash "\"")
-      in_md=0
-    }
-    { print }
-  ' package.nix >"$temp_file"
+	sed -E "s|npmDepsHash = \"[^\"]+\"|npmDepsHash = \"$hash\"|" package.nix >"$temp_file"
 	mv "$temp_file" package.nix
 }
 
-prefetch_model_data_hash() {
+npm_tarball_url() {
 	local version="$1"
-	local url="$NPM_REGISTRY_URL/$NPM_PACKAGE_AI_NAME/-/pi-ai-$version.tgz"
-	nix store prefetch-file --json "$url" 2>/dev/null | sed -n 's/.*"hash":"\([^"]*\)".*/\1/p'
+	printf '%s/%s/-/%s-%s.tgz\n' \
+		"$NPM_REGISTRY_URL" "$NPM_PACKAGE_NAME" "$NPM_TARBALL_NAME" "$version"
+}
+
+prefetch_source() {
+	local version="$1"
+	nix store prefetch-file --json "$(npm_tarball_url "$version")" 2>/dev/null
+}
+
+hydrate_npm_shrinkwrap() {
+	local source_path="$1"
+	local temp_dir
+	temp_dir=$(mktemp -d)
+	tar -xzf "$source_path" -C "$temp_dir" package/npm-shrinkwrap.json
+
+	local lock_file="$temp_dir/package/npm-shrinkwrap.json"
+	while IFS=$'\t' read -r key version; do
+		local package="${key##*node_modules/}"
+		local integrity
+		integrity=$(npm view "$package@$version" dist.integrity 2>/dev/null)
+		if [ -z "$integrity" ]; then
+			log_error "Failed to fetch npm integrity for $package@$version"
+			rm -rf "$temp_dir"
+			return 1
+		fi
+
+		local next_lock="$lock_file.next"
+		jq --tab --arg key "$key" --arg integrity "$integrity" \
+			'.packages[$key].integrity = $integrity' "$lock_file" >"$next_lock"
+		mv "$next_lock" "$lock_file"
+	done < <(
+		jq -r '
+      .packages | to_entries[]
+      | select(.key != "")
+      | select(.value.link != true)
+      | select((.value.resolved // "") | startswith("git+") | not)
+      | select(.value.integrity == null)
+      | [.key, .value.version]
+      | @tsv
+    ' "$lock_file"
+	)
+
+	local missing_integrities
+	missing_integrities=$(
+		jq '
+      [
+        .packages | to_entries[]
+        | select(.key != "")
+        | select(.value.link != true)
+        | select((.value.resolved // "") | startswith("git+") | not)
+        | select(.value.integrity == null)
+      ] | length
+    ' "$lock_file"
+	)
+	if [ "$missing_integrities" -ne 0 ]; then
+		log_error "Hydrated shrinkwrap still has $missing_integrities missing integrity fields"
+		rm -rf "$temp_dir"
+		return 1
+	fi
+
+	cp "$lock_file" npm-shrinkwrap.json
+	rm -rf "$temp_dir"
 }
 
 extract_got_hash() {
 	sed -nE 's/^[[:space:]]*got:[[:space:]]+(sha256-[A-Za-z0-9+\/=]+).*/\1/p' | tail -1
 }
 
-prefetch_hash_from_nix_mismatch() {
-	local label="$1"
+prefetch_npm_deps_hash() {
 	local output
 	local status
 
@@ -105,14 +143,14 @@ prefetch_hash_from_nix_mismatch() {
 	set -e
 
 	if [ "$status" -eq 0 ]; then
-		log_error "Expected a fixed-output hash mismatch while prefetching $label, but nix build succeeded."
+		log_error "Expected an npmDepsHash mismatch, but nix build succeeded"
 		return 1
 	fi
 
 	local hash
 	hash=$(printf '%s\n' "$output" | extract_got_hash)
 	if [ -z "$hash" ]; then
-		log_error "Could not extract computed $label hash from nix output:"
+		log_error "Could not extract npmDepsHash from nix output:"
 		printf '%s\n' "$output" >&2
 		return 1
 	fi
@@ -120,85 +158,79 @@ prefetch_hash_from_nix_mismatch() {
 	printf '%s\n' "$hash"
 }
 
-cleanup_backup_files() {
-	rm -f package.nix.bak
-}
-
 rollback_package() {
-	if [ -f package.nix.bak ]; then
-		mv package.nix.bak package.nix
-	fi
+	local backup_dir="$1"
+	cp "$backup_dir/package.nix" package.nix
+	cp "$backup_dir/npm-shrinkwrap.json" npm-shrinkwrap.json
+	rm -rf "$backup_dir"
 }
 
 update_to_version() {
 	local new_version="$1"
+	local backup_dir
+	backup_dir=$(mktemp -d)
+	cp package.nix npm-shrinkwrap.json "$backup_dir"
+	trap 'rollback_package "$backup_dir"' ERR
+	trap 'rollback_package "$backup_dir"; exit 130' INT
+	trap 'rollback_package "$backup_dir"; exit 143' TERM
 
 	log_info "Updating pi-coding-agent to version $new_version..."
-
-	cp package.nix package.nix.bak
-	trap rollback_package ERR
-
 	set_version "$new_version"
 
-	log_info "Prefetching model data hash..."
-	local model_data_hash
-	model_data_hash=$(prefetch_model_data_hash "$new_version")
-	if [ -z "$model_data_hash" ]; then
-		log_error "Failed to prefetch model data hash for pi-ai $new_version"
+	log_info "Prefetching npm release tarball..."
+	local source_info
+	source_info=$(prefetch_source "$new_version")
+	local source_hash
+	source_hash=$(jq -r .hash <<<"$source_info")
+	local source_path
+	source_path=$(jq -r .storePath <<<"$source_info")
+	if [ -z "$source_hash" ] || [ -z "$source_path" ]; then
+		log_error "Failed to prefetch npm release tarball for $new_version"
 		return 1
 	fi
-	log_info "  modelData: $model_data_hash"
-	set_model_data_hash "$model_data_hash"
-
-	log_info "Prefetching source hash..."
-	set_source_hash "$FAKE_HASH"
-	set_npm_deps_hash "$FAKE_HASH"
-	local source_hash
-	source_hash=$(prefetch_hash_from_nix_mismatch "source")
 	log_info "  source: $source_hash"
 	set_source_hash "$source_hash"
 
-	log_info "Prefetching npm dependency hash..."
+	log_info "Hydrating npm shrinkwrap integrity fields..."
+	hydrate_npm_shrinkwrap "$source_path"
+
+	log_info "Prefetching npm dependencies..."
+	set_npm_deps_hash "$FAKE_HASH"
 	local npm_hash
-	npm_hash=$(prefetch_hash_from_nix_mismatch "npmDeps")
+	npm_hash=$(prefetch_npm_deps_hash)
 	log_info "  npmDepsHash: $npm_hash"
 	set_npm_deps_hash "$npm_hash"
 
-	cleanup_backup_files
-	trap - ERR
-
 	if command -v nixfmt >/dev/null 2>&1; then
-		nixfmt package.nix flake.nix || true
+		nixfmt package.nix || true
 	elif command -v nixfmt-rfc-style >/dev/null 2>&1; then
-		nixfmt-rfc-style package.nix flake.nix || true
+		nixfmt-rfc-style package.nix || true
 	fi
 
-	log_info "Updating flake.lock..."
-	nix flake update
-
 	log_info "Verifying build..."
-	nix build .#pi-coding-agent -o result --print-build-logs
-	./result/bin/pi --version
+	local output_path
+	output_path=$(nix build .#pi-coding-agent --no-link --print-out-paths --print-build-logs)
+	"$output_path/bin/pi" --version
 
+	rm -rf "$backup_dir"
+	trap - ERR INT TERM
 	log_info "Successfully updated pi-coding-agent to $new_version"
 }
 
 ensure_in_repository_root() {
-	if [ ! -f "flake.nix" ] || [ ! -f "package.nix" ]; then
+	if [ ! -f flake.nix ] || [ ! -f package.nix ]; then
 		log_error "flake.nix or package.nix not found. Run this script from the repository root."
 		exit 2
 	fi
 }
 
 ensure_required_tools_installed() {
-	command -v nix >/dev/null 2>&1 || {
-		log_error "nix is required but not installed."
-		exit 2
-	}
-	if ! command -v npm >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
-		log_error "npm or curl is required to fetch the latest version."
-		exit 2
-	fi
+	for tool in nix npm jq tar; do
+		command -v "$tool" >/dev/null 2>&1 || {
+			log_error "$tool is required but not installed."
+			exit 2
+		}
+	done
 }
 
 print_usage() {
@@ -213,7 +245,7 @@ Options:
 Examples:
   scripts/update.sh
   scripts/update.sh --check
-  scripts/update.sh --version 0.80.3
+  scripts/update.sh --version 0.84.1
 USAGE
 }
 
@@ -247,13 +279,7 @@ parse_arguments() {
 		esac
 	done
 
-	echo "$target_version|$check_only"
-}
-
-show_changes() {
-	echo ""
-	log_info "Changes made:"
-	git diff --stat package.nix flake.lock 2>/dev/null || true
+	printf '%s|%s\n' "$target_version" "$check_only"
 }
 
 main() {
@@ -262,15 +288,12 @@ main() {
 
 	local args
 	args=$(parse_arguments "$@")
-	local target_version
-	target_version=$(echo "$args" | cut -d'|' -f1)
-	local check_only
-	check_only=$(echo "$args" | cut -d'|' -f2)
-
+	local target_version="${args%%|*}"
+	local check_only="${args#*|}"
 	local current_version
 	current_version=$(get_current_version)
-	local latest_version
-	latest_version="$target_version"
+	local latest_version="$target_version"
+
 	if [ -z "$latest_version" ]; then
 		latest_version=$(get_latest_version)
 	fi
@@ -289,7 +312,7 @@ main() {
 	fi
 
 	update_to_version "$latest_version"
-	show_changes
+	git diff --stat package.nix npm-shrinkwrap.json 2>/dev/null || true
 }
 
 main "$@"

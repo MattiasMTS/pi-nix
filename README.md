@@ -70,7 +70,7 @@ Update to latest:
 Update to a specific version:
 
 ```bash
-./scripts/update.sh --version 0.80.3
+./scripts/update.sh --version 0.84.1
 ```
 
 ## Automation
@@ -78,14 +78,14 @@ Update to a specific version:
 GitHub Actions included here:
 
 - `Build`: builds and smoke-tests Pi on Linux and macOS.
-- `Update Pi Version`: checks npm hourly, updates `package.nix` + `flake.lock`, and opens an auto-merge PR.
+- `Update Pi Version`: checks npm hourly, updates `package.nix` and the hydrated npm shrinkwrap, then opens an auto-merge PR.
 - `Create Version Tag`: creates immutable `vX.Y.Z` tags plus moving `latest` and `vMAJOR` tags after successful main builds.
 
 For auto-merge to work, enable GitHub repository auto-merge and use branch protection that requires the `Build` check.
 
 ## Notes
 
-This package builds Pi from the upstream `earendil-works/pi` source tag and bundles the npm dependency tree through `buildNpmPackage`. It also wraps `pi` with `ripgrep` and `fd` in `PATH`, and sets:
+This package installs Pi from the published `@earendil-works/pi-coding-agent` tarball and realizes its production dependency tree reproducibly through `buildNpmPackage`. Using the release artifact avoids duplicating the upstream monorepo build graph. It also wraps `pi` with `ripgrep` and `fd` in `PATH`, and sets:
 
 - `PI_SKIP_VERSION_CHECK=1` because Nix owns the binary version.
 - `PI_TELEMETRY=0` to avoid install/update telemetry from this Nix-managed build.
