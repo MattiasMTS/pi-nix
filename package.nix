@@ -12,13 +12,13 @@
 
 buildNpmPackage (finalAttrs: {
   pname = "pi-coding-agent";
-  version = "0.84.3";
+  version = "0.84.4";
 
   # Use the published npm artifact as the packaging boundary. It contains the
   # compiled application, model catalog, and a reproducible npm shrinkwrap.
   src = fetchurl {
     url = "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-${finalAttrs.version}.tgz";
-    hash = "sha256-0H3EF/eKFNrDdqh4tlVrUZYfEY95dx7jdTM9xRNWvHU=";
+    hash = "sha256-W852bRnDzroY8/uq2RxEnJ+dc5gfnjQA7O+TIAbwaWg=";
   };
   sourceRoot = "package";
 
@@ -32,7 +32,7 @@ buildNpmPackage (finalAttrs: {
     sed -i '/^[[:space:]]*"devDependencies": {$/,/^[[:space:]]*},$/d' package.json
   '';
 
-  npmDepsHash = "sha256-0Nkr7oG7d9PRk/Xn+Z6EL/9e+F/rloeXWKoAVeNkDjE=";
+  npmDepsHash = "sha256-2bPZDnKU2a+tjJ4Y1YZLw7AO1CUC3uAY9PF3jNzClGU=";
   npmFlags = [
     "--ignore-scripts"
     "--no-audit"
