@@ -42,3 +42,12 @@ jobs:
 
       - name: Test pi
         run: ./result/bin/pi --version
+
+  create-tag:
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/create-version-tag.yml
