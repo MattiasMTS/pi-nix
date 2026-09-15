@@ -9,15 +9,22 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: version-tags
+  cancel-in-progress: false
+
 jobs:
   create-tag:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - name: Extract version from package.nix
@@ -55,17 +62,18 @@ jobs:
 
       - name: Update moving tags
         run: |
+          # An older build may finish after a newer commit has reached main.
+          git fetch origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "Skipping moving tags because main has advanced."
+            exit 0
+          fi
+
           version="${{ steps.version.outputs.version }}"
           major="${{ steps.major.outputs.major }}"
 
-          git push origin :refs/tags/latest 2>/dev/null || true
-          git push origin :refs/tags/v$major 2>/dev/null || true
+          git tag -fa latest -m "Latest release: v$version"
+          git tag -fa "v$major" -m "Latest v$major release: v$version"
 
-          git tag -d latest 2>/dev/null || true
-          git tag -d v$major 2>/dev/null || true
-
-          git tag -a latest -m "Latest release: v$version"
-          git tag -a "v$major" -m "Latest v$major release: v$version"
-
-          git push origin latest
-          git push origin "v$major"
+          # Publish both together: latest is also the updater's completion marker.
+          git push --atomic --force origin refs/tags/latest "refs/tags/v$major"

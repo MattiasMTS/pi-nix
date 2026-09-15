@@ -6,17 +6,25 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
+concurrency:
+  group: update-pi
+  cancel-in-progress: false
+
 jobs:
   check-and-update:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Setup Nix
@@ -44,12 +52,21 @@ jobs:
           elif [ "$status" -eq 1 ]; then
             current=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1)
             latest=$(npm view @earendil-works/pi-coding-agent version)
-            echo "current=$current" >> "$GITHUB_OUTPUT"
-            echo "latest=$latest" >> "$GITHUB_OUTPUT"
-            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "current=$current"
+              echo "latest=$latest"
+              echo "update_needed=true"
+            } >> "$GITHUB_OUTPUT"
           else
             exit "$status"
           fi
+
+      - name: Recover an unfinished release
+        if: steps.check.outputs.update_needed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: ./scripts/build-main.sh
 
       - name: Update version and hashes
         if: steps.check.outputs.update_needed == 'true'
@@ -61,6 +78,10 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          add-paths: |
+            package.nix
+            npm-shrinkwrap.json
           commit-message: "chore: update pi-coding-agent to ${{ steps.check.outputs.latest }}"
           title: "chore: update pi-coding-agent to ${{ steps.check.outputs.latest }}"
           body: |
@@ -77,31 +98,35 @@ jobs:
             ### Verification
             - `nix build .#pi-coding-agent`
             - `./result/bin/pi --version`
-          branch: update-pi-${{ steps.check.outputs.latest }}
+          branch: update-pi
           delete-branch: true
           labels: |
             dependencies
             automated
 
-      - name: Enable auto-merge
+      - name: Build and merge update
         if: steps.check.outputs.update_needed == 'true' && steps.create-pr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge ${{ steps.create-pr.outputs.pull-request-number }} --auto --squash --delete-branch
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
+          HEAD_SHA: ${{ steps.create-pr.outputs.pull-request-head-sha }}
+        run: ./scripts/merge-update.sh
 
       - name: Summary
         if: always()
         run: |
-          echo "## Update Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ steps.check.outputs.update_needed }}" = "true" ]; then
-            echo "- **Current Version:** ${{ steps.check.outputs.current }}" >> "$GITHUB_STEP_SUMMARY"
-            echo "- **Latest Version:** ${{ steps.check.outputs.latest }}" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "✅ Pull request created." >> "$GITHUB_STEP_SUMMARY"
-          else
-            current=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1)
-            echo "- **Current Version:** $current" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "✅ Already up to date." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "## Update Summary"
+            echo ""
+            if [ "${{ steps.check.outputs.update_needed }}" = "true" ]; then
+              echo "- **Current Version:** ${{ steps.check.outputs.current }}"
+              echo "- **Latest Version:** ${{ steps.check.outputs.latest }}"
+              echo ""
+              echo "- **Update result:** ${{ job.status }} (see build and merge step)"
+            elif [ "${{ steps.check.outputs.update_needed }}" = "false" ]; then
+              echo "✅ Already up to date."
+            else
+              echo "Update check did not complete successfully."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

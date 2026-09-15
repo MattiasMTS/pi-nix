@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,6 +25,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Test update automation
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tests -v
 
       - name: Setup Nix
         uses: cachix/install-nix-action@v31
