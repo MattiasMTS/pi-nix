@@ -1,10 +1,7 @@
 name: Create Version Tag
 
 on:
-  workflow_run:
-    workflows: [Build]
-    types: [completed]
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: write
@@ -15,16 +12,13 @@ concurrency:
 
 jobs:
   create-tag:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Extract version from package.nix

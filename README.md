@@ -79,7 +79,7 @@ GitHub Actions included here:
 
 - `Build`: builds and smoke-tests Pi on Linux and macOS.
 - `Update Pi Version`: checks npm hourly, updates `package.nix` and the hydrated npm shrinkwrap, and maintains one PR on the `update-pi` branch. It explicitly starts and waits for the Linux/macOS builds, merges the tested commit, and starts a build on `main` for tagging. Failed updates stay open and are retried on the next scheduled run.
-- `Create Version Tag`: creates immutable `vX.Y.Z` tags plus moving `latest` and `vMAJOR` tags after successful main builds.
+- `Create Version Tag`: a reusable workflow called by `Build` after both main platform builds pass. It creates immutable `vX.Y.Z` tags plus moving `latest` and `vMAJOR` tags. Calling it as a dependent job also works for bot-dispatched builds, whose completion does not trigger a separate `workflow_run` workflow.
 
 If the post-merge build or tagging fails, the next hourly updater retries the main build until `latest` points at the current main commit.
 

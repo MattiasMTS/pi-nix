@@ -26,5 +26,5 @@ fi
 gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$HEAD_SHA"
 
 # A merge performed with GITHUB_TOKEN does not trigger the push workflow.
-# The successful main build will trigger Create Version Tag via workflow_run.
+# The main Build workflow publishes tags after both platform builds succeed.
 gh workflow run build.yml --ref main
