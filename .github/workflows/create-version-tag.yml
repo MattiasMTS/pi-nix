@@ -72,14 +72,8 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           major="${{ steps.major.outputs.major }}"
 
-          git push origin :refs/tags/latest 2>/dev/null || true
-          git push origin :refs/tags/v$major 2>/dev/null || true
+          git tag -fa latest -m "Latest release: v$version"
+          git tag -fa "v$major" -m "Latest v$major release: v$version"
 
-          git tag -d latest 2>/dev/null || true
-          git tag -d v$major 2>/dev/null || true
-
-          git tag -a latest -m "Latest release: v$version"
-          git tag -a "v$major" -m "Latest v$major release: v$version"
-
-          git push origin latest
-          git push origin "v$major"
+          # Publish both together: latest is also the updater's completion marker.
+          git push --atomic --force origin refs/tags/latest "refs/tags/v$major"

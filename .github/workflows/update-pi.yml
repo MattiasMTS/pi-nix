@@ -61,6 +61,13 @@ jobs:
             exit "$status"
           fi
 
+      - name: Recover an unfinished release
+        if: steps.check.outputs.update_needed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: ./scripts/build-main.sh
+
       - name: Update version and hashes
         if: steps.check.outputs.update_needed == 'true'
         run: ./scripts/update.sh --version "${{ steps.check.outputs.latest }}"

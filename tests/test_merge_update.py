@@ -38,15 +38,27 @@ else:
 
 
 class MergeUpdateTest(unittest.TestCase):
-    def run_scenario(self, scenario):
+    def run_scenario(self, scenario, script=SCRIPT):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             gh = root / "gh"
             gh.write_text(MOCK_GH)
             gh.chmod(0o755)
+            git = root / "git"
+            git.write_text('''#!/usr/bin/env python3
+import os
+import sys
+if sys.argv[-1] == "HEAD":
+    print("main-commit")
+elif os.environ["SCENARIO"] == "missing_latest_tag":
+    sys.exit(1)
+else:
+    print("main-commit" if os.environ["SCENARIO"] == "released_main" else "older-commit")
+''')
+            git.chmod(0o755)
             log = root / "calls.jsonl"
             result = subprocess.run(
-                ["bash", str(SCRIPT)],
+                ["bash", str(script)],
                 env={
                     **os.environ,
                     "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
@@ -61,7 +73,7 @@ class MergeUpdateTest(unittest.TestCase):
                 text=True,
                 timeout=10,
             )
-            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
             return result, calls
 
     def test_success_builds_branch_merges_tested_commit_then_builds_main(self):
@@ -104,6 +116,23 @@ class MergeUpdateTest(unittest.TestCase):
         result, calls = self.run_scenario("main_dispatch_failure")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(calls[-1], ["workflow", "run", "build.yml", "--ref", "main"])
+
+    def test_next_updater_run_recovers_failed_main_dispatch(self):
+        result, _ = self.run_scenario("main_dispatch_failure")
+        self.assertNotEqual(result.returncode, 0)
+        result, calls = self.run_scenario("unreleased_main", SCRIPT.with_name("build-main.sh"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["workflow", "run", "build.yml", "--ref", "main"]])
+
+    def test_missing_latest_tag_starts_main_build(self):
+        result, calls = self.run_scenario("missing_latest_tag", SCRIPT.with_name("build-main.sh"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["workflow", "run", "build.yml", "--ref", "main"]])
+
+    def test_released_main_does_not_rebuild_hourly(self):
+        result, calls = self.run_scenario("released_main", SCRIPT.with_name("build-main.sh"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

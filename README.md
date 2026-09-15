@@ -81,6 +81,8 @@ GitHub Actions included here:
 - `Update Pi Version`: checks npm hourly, updates `package.nix` and the hydrated npm shrinkwrap, and maintains one PR on the `update-pi` branch. It explicitly starts and waits for the Linux/macOS builds, merges the tested commit, and starts a build on `main` for tagging. Failed updates stay open and are retried on the next scheduled run.
 - `Create Version Tag`: creates immutable `vX.Y.Z` tags plus moving `latest` and `vMAJOR` tags after successful main builds.
 
+If the post-merge build or tagging fails, the next hourly updater retries the main build until `latest` points at the current main commit.
+
 Keep the `build (ubuntu-latest)` and `build (macos-latest)` checks required in the rules for `main`. Updates use the repository's `GITHUB_TOKEN` with `actions: write`, `contents: write`, and `pull-requests: write`; no PAT, GitHub App, or manual workflow approval is needed. Allow GitHub Actions to create pull requests in the repository's Actions settings.
 
 Run the automation tests locally with `python3 -m unittest discover -s tests -v`.
