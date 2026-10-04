@@ -34,11 +34,6 @@ jobs:
             experimental-features = nix-command flakes
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Check for updates
         id: check
         run: |
@@ -50,8 +45,8 @@ jobs:
           if [ "$status" -eq 0 ]; then
             echo "update_needed=false" >> "$GITHUB_OUTPUT"
           elif [ "$status" -eq 1 ]; then
-            current=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1)
-            latest=$(npm view @earendil-works/pi-coding-agent version)
+            current=$(jq -r .version install-lock/package.json)
+            latest=$(curl -fsSL https://pi.dev/api/installer/releases/latest | jq -r .version)
             {
               echo "current=$current"
               echo "latest=$latest"
@@ -80,8 +75,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           base: main
           add-paths: |
-            package.nix
-            npm-shrinkwrap.json
+            install-lock
           commit-message: "chore: update pi-coding-agent to ${{ steps.check.outputs.latest }}"
           title: "chore: update pi-coding-agent to ${{ steps.check.outputs.latest }}"
           body: |
@@ -90,10 +84,8 @@ jobs:
             Updates `@earendil-works/pi-coding-agent` from `${{ steps.check.outputs.current }}` to `${{ steps.check.outputs.latest }}`.
 
             ### Changes
-            - Updated `version` in `package.nix`
-            - Updated npm release tarball hash
-            - Hydrated `npm-shrinkwrap.json` integrity fields
-            - Updated `npmDepsHash`
+            - Synced `install-lock/` with the pi.dev managed-installer lockfile
+            - Hydrated integrity for pi's own packages from the release metadata
 
             ### Verification
             - `nix build .#pi-coding-agent`

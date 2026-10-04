@@ -21,10 +21,10 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Extract version from package.nix
+      - name: Extract version from install-lock
         id: version
         run: |
-          version=$(sed -n 's/.*version = "\([^"]*\)".*/\1/p' package.nix | head -1)
+          version=$(jq -r .version install-lock/package.json)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
