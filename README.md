@@ -2,7 +2,7 @@
 
 Always-fresh Nix package for [Pi](https://pi.dev), the minimal terminal coding harness.
 
-This mirrors the shape of `sadjow/claude-code-nix` and `sadjow/codex-cli-nix`: the flake packages upstream Pi, checks npm for new versions on a schedule, updates hashes automatically, builds/tests the result, and opens an update PR.
+This mirrors the shape of `sadjow/claude-code-nix` and `sadjow/codex-cli-nix`: the flake packages upstream Pi, checks pi.dev for new releases on a schedule, syncs the official installer lockfile, builds/tests the result, and opens an update PR.
 
 ## Why
 
@@ -78,7 +78,7 @@ Update to a specific version:
 GitHub Actions included here:
 
 - `Build`: builds and smoke-tests Pi on Linux and macOS.
-- `Update Pi Version`: checks npm hourly, updates `package.nix` and the hydrated npm shrinkwrap, and maintains one PR on the `update-pi` branch. It explicitly starts and waits for the Linux/macOS builds, merges the tested commit, and starts a build on `main` for tagging. Failed updates stay open and are retried on the next scheduled run.
+- `Update Pi Version`: checks the pi.dev installer API hourly, syncs `install-lock/`, and maintains one PR on the `update-pi` branch. It explicitly starts and waits for the Linux/macOS builds, merges the tested commit, and starts a build on `main` for tagging. Failed updates stay open and are retried on the next scheduled run.
 - `Create Version Tag`: a reusable workflow called by `Build` after both main platform builds pass. It creates immutable `vX.Y.Z` tags plus moving `latest` and `vMAJOR` tags. Calling it as a dependent job also works for bot-dispatched builds, whose completion does not trigger a separate `workflow_run` workflow.
 
 If the post-merge build or tagging fails, the next hourly updater retries the main build until `latest` points at the current main commit.
@@ -89,7 +89,7 @@ Run the automation tests locally with `python3 -m unittest discover -s tests -v`
 
 ## Notes
 
-This package installs Pi from the published `@earendil-works/pi-coding-agent` tarball and realizes its production dependency tree reproducibly through `buildNpmPackage`. Using the release artifact avoids duplicating the upstream monorepo build graph. It also wraps `pi` with `ripgrep` and `fd` in `PATH`, and sets:
+This package builds the same `node_modules` tree as the official managed installer (`curl pi.dev/install.sh | sh`). `install-lock/` is the installer's `package.json` + `package-lock.json` from `https://pi.dev/api/installer/releases/<version>/`, with integrity for pi's own packages filled in from the release metadata. Nix fetches every package by its lockfile integrity via `importNpmLock` and installs with the installer's flags (`--ignore-scripts --omit=dev --include=optional`), so there are no hashes to maintain. The only differences from a managed install are Nix-patched shebangs and, on Linux, patchelf'd native helpers. It also wraps `pi` with `ripgrep` and `fd` in `PATH`, and sets:
 
 - `PI_SKIP_VERSION_CHECK=1` because Nix owns the binary version.
 - `PI_TELEMETRY=0` to avoid install/update telemetry from this Nix-managed build.
